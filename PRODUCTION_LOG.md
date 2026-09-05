@@ -111,3 +111,27 @@ Publish outbox events to the `payment-events` topic using the full ABS event env
 
 ### Next
 Deploy and integrate live: Cloud SQL database, Cloud Run service, Secret Manager configuration, the `payment-events` Pub/Sub infrastructure, and a live connection to the ledger. The Payment Suspense and Settlement Clearing accounts are provisioned on the ledger side, since the ledger owns financial state; the orchestrator receives only their account IDs and settles through the ledger API, never touching the ledger database. Then prove the full path end to end and write the README.
+
+## Milestone 6
+
+### Goal
+Deploy the orchestrator live, prove the full path end to end against the live ledger, and codify the infrastructure as Terraform.
+
+### Completed
+- Live infrastructure on the ledger's GCP project: the orchestrator's own `payments` database and `orchestrator` user on the shared Cloud SQL instance, an Artifact Registry repository, Secret Manager secrets for the database URL and the ledger credential injected at runtime, the `payment-events` topic and subscription, and a Cloud Run service. A deploy job in CI builds, pushes and rolls out on every push to `main`.
+- Terraform codifying the orchestrator's slice of the project (`main.tf`, `variables.tf`, `outputs.tf`): the database and user, Artifact Registry, both secrets and their access grants, a dedicated least-privilege runner service account, the topic, subscription and publisher grant, and the Cloud Run service. It references the ledger's Cloud SQL instance through a data source rather than creating a second server, so the dependency is explicit: the ledger is applied first, the orchestrator layers on top.
+- A `terraform` CI workflow (`fmt -check`, `init`, `validate`) matching the ledger's.
+- Test count: 61 to 63, a schema regression test.
+
+### Problems / Decisions
+- The first live payment returned 500. The `paymentstate` type is created by migration 001 from the enum's lowercase values (`received`), but the ORM's `Enum(PaymentState)` column defaulted to persisting the member names (`RECEIVED`), which the live type rejected with `invalid input value for enum paymentstate: "RECEIVED"`. It passed CI because the suite builds tables from `Base.metadata`, which is self-consistent (names on both sides), while the live schema is built by Alembic (values), so only production ever exercised the ORM and the migration against each other. Fixed with `values_callable` so the ORM emits the values, and added a schema test that fails if the model and the initial migration ever diverge on the enum labels again. No data migration was needed: the live type was already correct and held no rows.
+- The orchestrator takes its own database and user on the ledger's existing Cloud SQL instance rather than standing up a second server. One instance, isolated schemas, smaller surface, and the shared-instance dependency is expressed as a Terraform data source.
+- The infrastructure was bootstrapped by CLI during the first deploy and then codified as Terraform, matching the ledger. The Terraform is the reproducible definition of the stack and declares a dedicated runner service account as the intended least-privilege runtime identity.
+
+### Evidence
+- Live `GET /health` returns 200 with the database connected. A real payment settled end to end against the live ledger: the customer moved from 1000.00 to 750.00, Payment Suspense netted to zero (reserve moved funds in, capture moved them out), and Settlement Clearing moved from 0 to 250.00. The payment traversed the full machine, `received` to `settled` through risk, reserve, provider and capture, routed via NorthPay, with the reserve and capture ledger transactions both recorded on the payment.
+- Outbox and messaging: six events were written in the same transactions as the state changes, published to real Pub/Sub (`published: 6, failed: 0, transport: pubsub`) and the pending queue drained to zero. All six were then pulled from `payment-events-sub`, each carrying the same `correlation_id`: the full causal trace of one payment, live across the two services and the broker.
+- 63/63 tests green, ruff clean, `terraform fmt` clean.
+
+### Next
+Prove the failure and edge paths live (UNKNOWN to reconcile, duplicate callback dedup, ledger-unavailable retry), then write the README with the evidence.

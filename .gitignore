@@ -25,3 +25,9 @@ env/
 htmlcov/
 .mypy_cache/
 .ruff_cache/
+
+# Terraform: ignore local provider cache and state, keep the lock file
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars

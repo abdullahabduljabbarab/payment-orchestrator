@@ -1,7 +1,7 @@
 import logging
 from uuid import UUID
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
@@ -12,6 +12,8 @@ from app.ledger_client import HttpLedgerClient, LedgerClient
 from app.logging import setup_logging
 from app.models import Payment, PaymentEvent
 from app.providers import LegacyPay, NorthPay, RapidPay
+from app.publisher import get_transport
+from app.relay import pending_events, publish_pending
 from app.router import ProviderRouter
 from app.schemas import PaymentCreate, PaymentResponse
 from app.service import (
@@ -50,6 +52,10 @@ def get_ledger_client() -> LedgerClient:
 
 def get_provider_router() -> ProviderRouter:
     return _router
+
+
+def provide_transport():
+    return get_transport()
 
 
 class ProviderCallback(BaseModel):
@@ -139,3 +145,32 @@ def callback(
         db, payment, body.provider, body.provider_reference, body.outcome, ledger
     )
     return {"status": status}
+
+
+@app.get("/outbox/pending")
+def outbox_pending(
+    limit: int = Query(50, ge=1, le=200), db: Session = Depends(get_db)
+):
+    rows = pending_events(db, limit)
+    return {
+        "pending_count": len(rows),
+        "events": [
+            {
+                "event_id": str(r.id),
+                "event_type": r.event_type,
+                "aggregate_id": str(r.aggregate_id),
+                "correlation_id": str(r.correlation_id),
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+            }
+            for r in rows
+        ],
+    }
+
+
+@app.post("/outbox/publish")
+def outbox_publish(
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    transport=Depends(provide_transport),
+):
+    return publish_pending(db, transport, limit)

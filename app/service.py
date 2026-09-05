@@ -40,6 +40,15 @@ def evaluate_risk(payment: Payment) -> tuple[str, list[str]]:
 
 
 def _emit(db: Session, payment: Payment, event_type: str, payload: dict) -> None:
+    # Causation points at the previous event for this payment, giving a causal
+    # chain; the first event is caused by the originating request.
+    last = db.execute(
+        select(OutboxEvent.id)
+        .where(OutboxEvent.aggregate_id == payment.id)
+        .order_by(OutboxEvent.created_at.desc())
+        .limit(1)
+    ).scalar()
+    causation = last if last is not None else payment.correlation_id
     db.add(
         OutboxEvent(
             aggregate_type="payment",
@@ -47,6 +56,7 @@ def _emit(db: Session, payment: Payment, event_type: str, payload: dict) -> None
             event_type=event_type,
             payload=json.dumps(payload),
             correlation_id=payment.correlation_id,
+            causation_id=causation,
         )
     )
 

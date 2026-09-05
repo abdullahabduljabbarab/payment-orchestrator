@@ -6,6 +6,7 @@ from sqlalchemy import (
     Enum,
     ForeignKey,
     Index,
+    Integer,
     Numeric,
     String,
     Text,
@@ -100,7 +101,11 @@ class OutboxEvent(Base):
     aggregate_type = Column(String(50), nullable=False)
     aggregate_id = Column(UUID(as_uuid=True), nullable=False)
     event_type = Column(String(100), nullable=False)
+    event_version = Column(Integer, nullable=False, default=1)
     payload = Column(Text, nullable=False)
     correlation_id = Column(UUID(as_uuid=True), nullable=False)
+    # The event or request that directly caused this one, so a causal chain can
+    # be reconstructed: received -> approved -> reserved -> ...
+    causation_id = Column(UUID(as_uuid=True), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     published_at = Column(DateTime(timezone=True), nullable=True)

@@ -4,6 +4,23 @@ from uuid import UUID, uuid4
 from app.ledger_client import InsufficientFunds, LedgerUnavailable
 
 
+class FakeTransport:
+    """Records published envelopes. Can be set to fail to exercise the relay's
+    leave-pending-on-failure behaviour."""
+
+    name = "fake"
+
+    def __init__(self, fail: bool = False):
+        self.fail = fail
+        self.published: list[dict] = []
+
+    def publish(self, envelope: dict) -> str:
+        if self.fail:
+            raise RuntimeError("transport unavailable")
+        self.published.append(envelope)
+        return f"fake:{envelope['event_id']}"
+
+
 class FakeLedgerClient:
     """In-memory stand-in for the ledger. Idempotent by operation: calling the
     same operation for the same payment returns the same transaction id, the

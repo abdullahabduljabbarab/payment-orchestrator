@@ -45,3 +45,28 @@ jobs:
       - run: pytest -v
         env:
           TEST_DATABASE_URL: postgresql://payments:payments@localhost:5432/payments_test
+
+  deploy:
+    needs: [lint, test]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - run: gcloud auth configure-docker europe-west2-docker.pkg.dev --quiet
+      - run: docker build -t europe-west2-docker.pkg.dev/ledger-api-507618/payment-orchestrator/payment-orchestrator .
+      - run: docker push europe-west2-docker.pkg.dev/ledger-api-507618/payment-orchestrator/payment-orchestrator
+      - run: >
+          gcloud run deploy payment-orchestrator
+          --image europe-west2-docker.pkg.dev/ledger-api-507618/payment-orchestrator/payment-orchestrator
+          --region europe-west2
+          --allow-unauthenticated
+          --add-cloudsql-instances ledger-api-507618:europe-west2:ledger-db
+          --set-env-vars ENVIRONMENT=production,LEDGER_BASE_URL=https://ledger-api-465847189589.europe-west2.run.app,LEDGER_USERNAME=admin,SUSPENSE_ACCOUNT_ID=a0000000-0000-4000-8000-000000000001,SETTLEMENT_ACCOUNT_ID=a0000000-0000-4000-8000-000000000002,PUBSUB_TOPIC=projects/ledger-api-507618/topics/payment-events
+          --set-secrets DATABASE_URL=orchestrator-database-url:latest,LEDGER_PASSWORD=ledger-admin-password:latest

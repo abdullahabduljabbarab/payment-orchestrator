@@ -23,6 +23,17 @@ class Base(DeclarativeBase):
     pass
 
 
+# One shared enum type for every state column. values_callable makes SQLAlchemy
+# persist the member values ("received", ...) rather than its default of the
+# member names ("RECEIVED", ...), so the ORM agrees with the paymentstate type
+# the migration creates. Without this the app writes names the DB type rejects.
+payment_state = Enum(
+    PaymentState,
+    name="paymentstate",
+    values_callable=lambda enum_cls: [member.value for member in enum_cls],
+)
+
+
 class Payment(Base):
     __tablename__ = "payments"
 
@@ -30,7 +41,7 @@ class Payment(Base):
     account_id = Column(UUID(as_uuid=True), nullable=False)
     amount = Column(Numeric(12, 2), nullable=False)
     destination = Column(String, nullable=False)
-    state = Column(Enum(PaymentState), nullable=False, default=PaymentState.RECEIVED)
+    state = Column(payment_state, nullable=False, default=PaymentState.RECEIVED)
     provider = Column(String, nullable=True)
 
     # The three ledger transactions that make up a payment's financial effect.
@@ -57,8 +68,8 @@ class PaymentEvent(Base):
     payment_id = Column(
         UUID(as_uuid=True), ForeignKey("payments.id"), nullable=False
     )
-    from_state = Column(Enum(PaymentState), nullable=True)
-    to_state = Column(Enum(PaymentState), nullable=False)
+    from_state = Column(payment_state, nullable=True)
+    to_state = Column(payment_state, nullable=False)
     detail = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 

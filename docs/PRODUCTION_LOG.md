@@ -135,3 +135,24 @@ Deploy the orchestrator live, prove the full path end to end against the live le
 
 ### Next
 Prove the failure and edge paths live (UNKNOWN to reconcile, duplicate callback dedup, ledger-unavailable retry), then write the README with the evidence.
+
+## Milestone 7
+
+### Goal
+Prove the failure and edge paths against the live deployment, bring the API docs to the ledger's standard, and write the README with the evidence.
+
+### Completed
+- Live failure and edge proofs against the deployment: insufficient funds fails before any provider is called, high value is held for review, over-limit is rejected, a duplicate callback is deduplicated, reconcile is refused on a settled payment, a declining provider triggers a compensating release that returns the funds, and traffic fails over from the primary provider when its breaker opens.
+- OpenAPI metadata brought up to the ledger's standard: a description covering the reserve, capture and release model and the correctness and resilience properties, endpoint tags grouped into System, Payments, Reconciliation, Provider Callbacks and Event Delivery with per-endpoint summaries, and an MIT license link, so the interactive reference reads as a first-class API surface rather than an unlabelled default group.
+- README with the full evidence: the Swagger walkthrough (settle, state history, duplicate dedup, reconcile guard, insufficient funds), the live GCP infrastructure (Cloud Run, logs, Pub/Sub, Cloud SQL, Artifact Registry, Secret Manager), the causal event chain pulled straight from the subscription, and a requirement-to-test matrix over the suite.
+- MIT LICENSE.
+
+### Problems / Decisions
+- The stochastic provider paths (timeout to UNKNOWN to reconcile, all-providers-unavailable) are proven deterministically in the test suite rather than live, because the random simulators and a healthy ledger will not produce an injected timeout or outage on demand. The deterministic edges were driven live instead, and the natural compensating release and breaker fallback were caught by running a batch of live payments.
+
+### Evidence
+- Insufficient funds returns `failed` with the provider never reached and no money moved; a repeated callback returns `duplicate`; reconcile on a settled payment returns `409`; a live compensating release returned a declined payment's funds to the customer, leaving the balance whole; of 29 payments in one pass, six were served by the fallback provider after the primary's breaker opened.
+- 63/63 tests green.
+
+### Next
+Continue the ecosystem: the risk engine, which the orchestrator's allow, review and block contract is already built to hand off to, then notification, analytics and the shared platform infrastructure.

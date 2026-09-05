@@ -193,6 +193,8 @@ The full GCP stack (the database and user, Artifact Registry, both secrets, a le
 | Event capture atomic with state change, at-least-once (ABS-REQ-007) | `test_failed_publish_leaves_everything_pending`, `test_event_id_is_stable_for_consumer_dedup`, live Pub/Sub pull |
 | Model and migration agree on schema | `test_orm_enum_matches_initial_migration` |
 
+The full mapping of every requirement and behaviour to its test and live evidence is in [`docs/VV_PLAN.md`](docs/VV_PLAN.md).
+
 ---
 
 ## Running it locally
@@ -246,7 +248,7 @@ app/            FastAPI application, state machine, service layer, ledger client
 migrations/     Alembic migrations (schema and enum, then the ABS event envelope)
 terraform/      Orchestrator infrastructure as code on the ledger's project
 tests/          63 tests: state machine, ledger client, service lifecycle, router, outbox, API, schema
-docs/           Design, the build log, and the evidence screenshots
+docs/           Design, the V&V plan, the build log, and the evidence screenshots
 ```
 
 ---

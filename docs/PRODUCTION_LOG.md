@@ -156,3 +156,25 @@ Prove the failure and edge paths against the live deployment, bring the API docs
 
 ### Next
 Continue the ecosystem: the risk engine, which the orchestrator's allow, review and block contract is already built to hand off to, then notification, analytics and the shared platform infrastructure.
+
+## Milestone 8
+
+### Goal
+Integrate the risk engine: replace the local threshold stub with a call to the deployed engine, holding a payment for review when the engine is unreachable.
+
+### Completed
+- A `RiskClient`, in the shape of the ledger client: `POST /risk/evaluate` keyed on a deterministic `evaluation_id` per payment, so a retry after a crash returns the original decision rather than making a second one. A connection error or a 5xx raises `RiskUnavailable`.
+- `process_payment` now asks the engine for the decision instead of a local threshold. The threshold stub and its constants are gone; the engine is the single source of the decision.
+- Fail to review: if the engine is unreachable or times out, the payment is held in `RISK_REVIEW`, never allowed and never auto-rejected.
+- The engine URL injected as `RISK_BASE_URL` in CI and Terraform.
+- Test count: 67 to 72 (a fail-to-review test, and the risk client's response mapping and deterministic key).
+
+### Problems / Decisions
+- Strict fail-to-review, not a local fallback. When the engine is unreachable the orchestrator does not fall back to its old thresholds; that would reintroduce a second decision path that could fail open. Holding for review is the only safe default, the same shape as the reservation rule: uncertainty never moves money (ABS-REQ-013).
+- The risk call is idempotent on a deterministic `evaluation_id` derived from the payment id, so crash recovery re-issues the same evaluation and the engine returns the original decision.
+
+### Evidence
+- 72/72 tests: a payment whose engine decision is review is held without reserving, block is rejected, allow settles, and an unreachable engine holds the payment for review. The risk client maps a 200 to a decision and a 5xx or connection error to unavailable, and the evaluation id is deterministic per payment.
+
+### Next
+Deploy and prove the full live path: a payment whose risk decision comes from the live engine, and the fail-to-review behaviour when the engine is unreachable.

@@ -15,7 +15,7 @@ from app.service import (
     reconcile_payment,
 )
 from app.states import PaymentState
-from tests.fakes import FakeLedgerClient
+from tests.fakes import FakeLedgerClient, FakeRiskClient
 
 
 def _new_payment(db, amount: str):
@@ -56,7 +56,7 @@ def test_insufficient_funds_fails_and_never_reaches_provider(db):
     ledger = FakeLedgerClient(insufficient=True)
     provider = ScriptedProvider("P1", [Outcome.SUCCESS])
     payment = _new_payment(db, "100.00")
-    process_payment(db, payment, _router(provider), ledger)
+    process_payment(db, payment, _router(provider), ledger, FakeRiskClient())
 
     db.refresh(payment)
     assert payment.state == PaymentState.FAILED
@@ -65,30 +65,51 @@ def test_insufficient_funds_fails_and_never_reaches_provider(db):
     assert "payment.reservation_failed" in _events(db, payment.id)
 
 
-def test_high_value_goes_to_review_without_reserving(db):
+def test_risk_review_holds_without_reserving(db):
     ledger = FakeLedgerClient()
-    payment = _new_payment(db, "5000.00")
-    process_payment(db, payment, _one_provider(Outcome.SUCCESS), ledger)
+    payment = _new_payment(db, "100.00")
+    process_payment(
+        db, payment, _one_provider(Outcome.SUCCESS), ledger, FakeRiskClient("review")
+    )
 
     db.refresh(payment)
     assert payment.state == PaymentState.RISK_REVIEW
     assert ledger.calls == []
 
 
-def test_over_limit_is_rejected(db):
+def test_risk_block_rejects_without_reserving(db):
     ledger = FakeLedgerClient()
-    payment = _new_payment(db, "10000.00")
-    process_payment(db, payment, _one_provider(Outcome.SUCCESS), ledger)
+    payment = _new_payment(db, "100.00")
+    process_payment(
+        db, payment, _one_provider(Outcome.SUCCESS), ledger, FakeRiskClient("block")
+    )
 
     db.refresh(payment)
     assert payment.state == PaymentState.REJECTED
     assert ledger.calls == []
 
 
+def test_risk_unavailable_holds_for_review(db):
+    # Fail safe: an unreachable engine holds the payment, never allows or rejects.
+    ledger = FakeLedgerClient()
+    payment = _new_payment(db, "100.00")
+    process_payment(
+        db,
+        payment,
+        _one_provider(Outcome.SUCCESS),
+        ledger,
+        FakeRiskClient(unavailable=True),
+    )
+
+    db.refresh(payment)
+    assert payment.state == PaymentState.RISK_REVIEW
+    assert ledger.calls == []
+
+
 def test_ledger_unavailable_leaves_payment_reserving(db):
     ledger = FakeLedgerClient(unavailable=True)
     payment = _new_payment(db, "100.00")
-    process_payment(db, payment, _one_provider(Outcome.SUCCESS), ledger)
+    process_payment(db, payment, _one_provider(Outcome.SUCCESS), ledger, FakeRiskClient())
 
     db.refresh(payment)
     assert payment.state == PaymentState.RESERVING
@@ -100,7 +121,7 @@ def test_ledger_unavailable_leaves_payment_reserving(db):
 def test_provider_success_settles(db):
     ledger = FakeLedgerClient()
     payment = _new_payment(db, "100.00")
-    process_payment(db, payment, _one_provider(Outcome.SUCCESS), ledger)
+    process_payment(db, payment, _one_provider(Outcome.SUCCESS), ledger, FakeRiskClient())
 
     db.refresh(payment)
     assert payment.state == PaymentState.SETTLED
@@ -120,7 +141,7 @@ def test_provider_success_settles(db):
 def test_provider_failure_releases_and_fails(db):
     ledger = FakeLedgerClient()
     payment = _new_payment(db, "100.00")
-    process_payment(db, payment, _one_provider(Outcome.FAILED), ledger)
+    process_payment(db, payment, _one_provider(Outcome.FAILED), ledger, FakeRiskClient())
 
     db.refresh(payment)
     assert payment.state == PaymentState.FAILED
@@ -138,7 +159,7 @@ def test_timeout_pins_to_provider_and_does_not_fall_back(db):
     first = ScriptedProvider("P1", [Outcome.TIMEOUT])
     second = ScriptedProvider("P2", [Outcome.SUCCESS])
     payment = _new_payment(db, "100.00")
-    process_payment(db, payment, _router(first, second), ledger)
+    process_payment(db, payment, _router(first, second), ledger, FakeRiskClient())
 
     db.refresh(payment)
     assert payment.state == PaymentState.UNKNOWN
@@ -153,7 +174,7 @@ def test_unavailable_falls_back_to_next_provider(db):
     first = ScriptedProvider("P1", [Outcome.UNAVAILABLE])
     second = ScriptedProvider("P2", [Outcome.SUCCESS])
     payment = _new_payment(db, "100.00")
-    process_payment(db, payment, _router(first, second), ledger)
+    process_payment(db, payment, _router(first, second), ledger, FakeRiskClient())
 
     db.refresh(payment)
     assert payment.state == PaymentState.SETTLED
@@ -173,6 +194,7 @@ def test_all_providers_unavailable_releases_reservation(db):
             ScriptedProvider("P2", [Outcome.UNAVAILABLE]),
         ),
         ledger,
+        FakeRiskClient(),
     )
 
     db.refresh(payment)
@@ -186,7 +208,7 @@ def test_reconcile_unknown_success_settles(db):
     ledger = FakeLedgerClient()
     router = _one_provider(Outcome.TIMEOUT, reconcile=Outcome.SUCCESS)
     payment = _new_payment(db, "100.00")
-    process_payment(db, payment, router, ledger)
+    process_payment(db, payment, router, ledger, FakeRiskClient())
     assert payment.state == PaymentState.UNKNOWN
 
     reconcile_payment(db, payment, router.provider("P1"), ledger)
@@ -199,7 +221,7 @@ def test_reconcile_unknown_failure_fails(db):
     ledger = FakeLedgerClient()
     router = _one_provider(Outcome.TIMEOUT, reconcile=Outcome.FAILED)
     payment = _new_payment(db, "100.00")
-    process_payment(db, payment, router, ledger)
+    process_payment(db, payment, router, ledger, FakeRiskClient())
 
     reconcile_payment(db, payment, router.provider("P1"), ledger)
     db.refresh(payment)
@@ -213,7 +235,7 @@ def test_duplicate_callback_captures_once(db):
     ledger = FakeLedgerClient()
     router = _one_provider(Outcome.TIMEOUT)
     payment = _new_payment(db, "100.00")
-    process_payment(db, payment, router, ledger)
+    process_payment(db, payment, router, ledger, FakeRiskClient())
     assert payment.state == PaymentState.UNKNOWN
 
     first = handle_callback(db, payment, "P1", "ref-1", "success", ledger)
@@ -237,7 +259,7 @@ def test_duplicate_callback_captures_once(db):
 def test_reservation_payload_carries_tx_id(db):
     ledger = FakeLedgerClient()
     payment = _new_payment(db, "250.00")
-    process_payment(db, payment, _one_provider(Outcome.SUCCESS), ledger)
+    process_payment(db, payment, _one_provider(Outcome.SUCCESS), ledger, FakeRiskClient())
 
     row = db.execute(
         select(OutboxEvent).where(

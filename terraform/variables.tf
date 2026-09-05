@@ -34,6 +34,12 @@ variable "ledger_base_url" {
   default     = "https://ledger-api-465847189589.europe-west2.run.app"
 }
 
+variable "risk_base_url" {
+  description = "Base URL of the risk engine the orchestrator asks to decide a payment"
+  type        = string
+  default     = "https://risk-engine-eppidgbmxa-nw.a.run.app"
+}
+
 variable "ledger_username" {
   description = "Username the orchestrator authenticates to the ledger with"
   type        = string

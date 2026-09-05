@@ -154,6 +154,11 @@ resource "google_cloud_run_v2_service" "payment_orchestrator" {
       }
 
       env {
+        name  = "RISK_BASE_URL"
+        value = var.risk_base_url
+      }
+
+      env {
         name  = "LEDGER_USERNAME"
         value = var.ledger_username
       }

@@ -175,7 +175,7 @@ The full GCP stack (the database and user, Artifact Registry, both secrets, a le
 
 ## Verification and evidence
 
-67 automated tests cover the state machine, the idempotent ledger client, the full service lifecycle, the provider router and circuit breaker, the transactional outbox, the API, schema integrity, and the event consumer's deduplication. On top of the unit tests, the full path was exercised against the live deployment: a real payment settling against the live ledger (customer 1000.00 to 750.00, Payment Suspense netting to zero, Settlement Clearing 0 to 250.00), the six lifecycle events published to and pulled back from Pub/Sub, and each failure and edge path driven live and shown above.
+72 automated tests cover the state machine, the idempotent ledger client, the risk client and its fail-to-review fallback, the full service lifecycle, the provider router and circuit breaker, the transactional outbox, the API, schema integrity, and the event consumer's deduplication. On top of the unit tests, the full path was exercised against the live deployment: a real payment settling against the live ledger (customer 1000.00 to 750.00, Payment Suspense netting to zero, Settlement Clearing 0 to 250.00), the six lifecycle events published to and pulled back from Pub/Sub, and each failure and edge path driven live and shown above.
 
 **A defect the live deployment found.** The first live payment returned `500`. The `paymentstate` type is created by the migration from the enum's lowercase values (`received`), but the ORM defaulted to persisting the member names (`RECEIVED`), which the live type rejected. It passed CI because the suite builds tables from the model metadata, which is self-consistent, while the live schema is built by Alembic, so only production exercised the two against each other. The fix persists the enum values, and a schema test now fails if the model and the migration ever diverge on the enum labels again. Full write-up in [`PRODUCTION_LOG.md`](docs/PRODUCTION_LOG.md), Milestone 6.
 
@@ -259,7 +259,7 @@ app/            FastAPI application, state machine, service layer, ledger client
 migrations/     Alembic migrations (schema and enum, then the ABS event envelope)
 terraform/      Orchestrator infrastructure as code on the ledger's project
 scripts/        Load test harness and the Pub/Sub consumer
-tests/          67 tests: state machine, ledger client, service lifecycle, router, outbox, API, schema, consumer
+tests/          72 tests: state machine, ledger client, risk client, service lifecycle, router, outbox, API, schema, consumer
 docs/           Design, requirements, decisions, engineering report, threat model, security, SLOs, V&V plan, build log, evidence
 ```
 

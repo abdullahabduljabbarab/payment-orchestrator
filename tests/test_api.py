@@ -4,10 +4,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.database import get_db
-from app.main import app, get_ledger_client, get_provider_router
+from app.main import app, get_ledger_client, get_provider_router, get_risk_client
 from app.providers import Outcome, ScriptedProvider
 from app.router import ProviderRouter
-from tests.fakes import FakeLedgerClient
+from tests.fakes import FakeLedgerClient, FakeRiskClient
 
 
 @pytest.fixture
@@ -20,6 +20,7 @@ def client(db):
     app.dependency_overrides[get_db] = override_db
     app.dependency_overrides[get_ledger_client] = lambda: fake
     app.dependency_overrides[get_provider_router] = lambda: router
+    app.dependency_overrides[get_risk_client] = lambda: FakeRiskClient()
     with TestClient(app) as c:
         yield c, fake
     app.dependency_overrides.clear()
@@ -44,11 +45,12 @@ def test_post_payment_settles(client):
     assert to_states[-1] == "settled"
 
 
-def test_post_payment_over_limit_rejected(client):
+def test_post_payment_blocked_by_risk_is_rejected(client):
     c, fake = client
+    app.dependency_overrides[get_risk_client] = lambda: FakeRiskClient("block")
     resp = c.post(
         "/payments",
-        json={"account_id": str(uuid4()), "amount": "10000.00", "destination": "acme"},
+        json={"account_id": str(uuid4()), "amount": "100.00", "destination": "acme"},
     )
     assert resp.status_code == 201
     assert resp.json()["state"] == "rejected"

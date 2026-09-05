@@ -2,7 +2,7 @@
 
 ## Approach
 
-Every requirement this service owns is verified by an automated test running against a PostgreSQL database, and every behaviour that can be driven deterministically is additionally proven against the live Cloud Run deployment. CI runs the full suite (67 tests) against a PostgreSQL service container on every push, applies the Alembic migrations before the tests, lints with ruff, and validates the Terraform. The requirements are the ABS system requirements owned by the orchestrator, defined in [SYSTEM_REQUIREMENTS.md](https://github.com/abdullahabduljabbarab/abs-financial-systems/blob/main/SYSTEM_REQUIREMENTS.md).
+Every requirement this service owns is verified by an automated test running against a PostgreSQL database, and every behaviour that can be driven deterministically is additionally proven against the live Cloud Run deployment. CI runs the full suite (72 tests) against a PostgreSQL service container on every push, applies the Alembic migrations before the tests, lints with ruff, and validates the Terraform. The requirements are the ABS system requirements owned by the orchestrator, defined in [SYSTEM_REQUIREMENTS.md](https://github.com/abdullahabduljabbarab/abs-financial-systems/blob/main/SYSTEM_REQUIREMENTS.md).
 
 ## Requirement-to-Test Mapping
 

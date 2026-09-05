@@ -10,7 +10,7 @@ from app.router import ProviderRouter
 from app.schemas import PaymentCreate
 from app.service import create_payment, handle_callback, process_payment
 from app.states import PaymentState
-from tests.fakes import FakeLedgerClient, FakeTransport
+from tests.fakes import FakeLedgerClient, FakeRiskClient, FakeTransport
 
 ENVELOPE_FIELDS = {
     "event_id",
@@ -32,7 +32,7 @@ def _settled_payment(db):
         db,
         PaymentCreate(account_id=uuid4(), amount=Decimal("100.00"), destination="acme"),
     )
-    process_payment(db, payment, router, ledger)
+    process_payment(db, payment, router, ledger, FakeRiskClient())
     return payment
 
 
@@ -112,7 +112,7 @@ def test_idempotent_retry_creates_no_duplicate_events(db):
         db,
         PaymentCreate(account_id=uuid4(), amount=Decimal("100.00"), destination="acme"),
     )
-    process_payment(db, payment, router, ledger)
+    process_payment(db, payment, router, ledger, FakeRiskClient())
     assert payment.state == PaymentState.UNKNOWN
 
     # the same callback three times must not create three captured/settled events

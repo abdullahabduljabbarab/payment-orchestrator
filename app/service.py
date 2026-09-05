@@ -10,7 +10,6 @@ state on disk.
 import json
 import logging
 from datetime import datetime, timezone
-from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -19,25 +18,12 @@ from sqlalchemy.orm import Session
 from app.ledger_client import InsufficientFunds, LedgerClient, LedgerUnavailable
 from app.models import OutboxEvent, Payment, PaymentEvent, ProviderAttempt
 from app.providers import Outcome, Provider
+from app.risk_client import RiskClient, RiskUnavailable, evaluation_id_for
 from app.router import ProviderRouter
 from app.schemas import PaymentCreate
 from app.states import PaymentState, assert_transition
 
 logger = logging.getLogger("orchestrator.service")
-
-# Risk thresholds. This is a deterministic placeholder for the risk engine,
-# which will later make this decision and emit risk events of its own.
-REVIEW_THRESHOLD = Decimal("5000")
-BLOCK_THRESHOLD = Decimal("10000")
-
-
-def evaluate_risk(payment: Payment) -> tuple[str, list[str]]:
-    if payment.amount >= BLOCK_THRESHOLD:
-        return "block", ["amount_over_limit"]
-    if payment.amount >= REVIEW_THRESHOLD:
-        return "review", ["high_value"]
-    return "allow", []
-
 
 def _emit(db: Session, payment: Payment, event_type: str, payload: dict) -> None:
     # Causation points at the previous event for this payment, giving a causal
@@ -386,21 +372,44 @@ def reconcile_payment(
 
 
 def process_payment(
-    db: Session, payment: Payment, router: ProviderRouter, ledger: LedgerClient
+    db: Session,
+    payment: Payment,
+    router: ProviderRouter,
+    ledger: LedgerClient,
+    risk: RiskClient,
 ) -> Payment:
     """Drive a newly received payment through risk, reservation and the
     provider. A payment ends this pass in SETTLED, FAILED, UNKNOWN (awaiting
     reconciliation), RISK_REVIEW (held) or REJECTED."""
     _advance(db, payment, PaymentState.RISK_PENDING)
 
-    decision, reasons = evaluate_risk(payment)
+    try:
+        result = risk.evaluate(
+            evaluation_id=evaluation_id_for(payment.id),
+            payment_id=payment.id,
+            account_id=payment.account_id,
+            amount=payment.amount,
+            destination=payment.destination,
+            correlation_id=payment.correlation_id,
+        )
+        decision, reasons, score = result.decision, result.reasons, result.score
+    except RiskUnavailable:
+        # Fail safe: the engine is unreachable, so hold the payment for review.
+        # Never allow an unscored payment, never auto-reject a customer for an
+        # outage. Uncertainty must not move money (ABS-REQ-013).
+        logger.warning(
+            "risk engine unavailable, holding payment for review",
+            extra={"payment_id": str(payment.id)},
+        )
+        decision, reasons, score = "review", ["risk_unavailable"], None
+
     if decision == "block":
         _advance(
             db,
             payment,
             PaymentState.REJECTED,
             event_type="payment.rejected",
-            payload={"payment_id": str(payment.id), "reasons": reasons},
+            payload={"payment_id": str(payment.id), "reasons": reasons, "score": score},
             detail="risk_block",
         )
         return payment
@@ -413,7 +422,7 @@ def process_payment(
         payment,
         PaymentState.APPROVED,
         event_type="payment.approved",
-        payload={"payment_id": str(payment.id)},
+        payload={"payment_id": str(payment.id), "score": score},
     )
     _reserve(db, payment, ledger)
 

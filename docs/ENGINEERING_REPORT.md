@@ -45,7 +45,7 @@ Deployed on GCP Cloud Run with auto-scaling (0 to 3 instances). CI/CD via GitHub
 
 | Metric | Value |
 |--------|-------|
-| Test count | 67 |
+| Test count | 72 |
 | Alembic migrations | 2 (initial schema and the paymentstate enum, then the ABS event envelope) |
 | API endpoints | 8 |
 | Payment states | 13, with a single allowed-transition table |

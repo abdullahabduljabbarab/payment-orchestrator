@@ -14,6 +14,7 @@ from app.models import Payment, PaymentEvent
 from app.providers import LegacyPay, NorthPay, RapidPay
 from app.publisher import get_transport
 from app.relay import pending_events, publish_pending
+from app.risk_client import HttpRiskClient, RiskClient
 from app.router import ProviderRouter
 from app.schemas import PaymentCreate, PaymentResponse
 from app.service import (
@@ -93,12 +94,20 @@ _ledger_client = HttpLedgerClient(
 )
 
 
+# A single risk client so its HTTP connection pool is reused across payments.
+_risk_client = HttpRiskClient(base_url=config.RISK_BASE_URL)
+
+
 def get_ledger_client() -> LedgerClient:
     return _ledger_client
 
 
 def get_provider_router() -> ProviderRouter:
     return _router
+
+
+def get_risk_client() -> RiskClient:
+    return _risk_client
 
 
 def provide_transport():
@@ -129,9 +138,10 @@ def post_payment(
     db: Session = Depends(get_db),
     ledger: LedgerClient = Depends(get_ledger_client),
     router: ProviderRouter = Depends(get_provider_router),
+    risk: RiskClient = Depends(get_risk_client),
 ):
     payment = create_payment(db, data)
-    payment = process_payment(db, payment, router, ledger)
+    payment = process_payment(db, payment, router, ledger, risk)
     return payment
 
 

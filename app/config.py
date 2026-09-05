@@ -8,6 +8,10 @@ DATABASE_URL = os.getenv(
 
 # The ledger this orchestrator settles against.
 LEDGER_BASE_URL = os.getenv("LEDGER_BASE_URL", "http://localhost:8000")
+
+# The risk engine this orchestrator asks to decide a payment before reserving.
+# If it is unreachable the payment is held for review, never allowed.
+RISK_BASE_URL = os.getenv("RISK_BASE_URL", "http://localhost:8080")
 LEDGER_USERNAME = os.getenv("LEDGER_USERNAME", "admin")
 LEDGER_PASSWORD = os.getenv("LEDGER_PASSWORD", "admin123")
 

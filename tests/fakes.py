@@ -2,6 +2,7 @@ from decimal import Decimal
 from uuid import UUID, uuid4
 
 from app.ledger_client import InsufficientFunds, LedgerUnavailable
+from app.risk_client import RiskResult, RiskUnavailable
 
 
 class FakeTransport:
@@ -53,3 +54,21 @@ class FakeLedgerClient:
 
     def release(self, payment_id: UUID, account_id: UUID, amount: Decimal) -> UUID:
         return self._op("release", payment_id)
+
+
+class FakeRiskClient:
+    """In-memory risk engine stand-in. Returns a fixed decision, or raises
+    RiskUnavailable to exercise the orchestrator's fail-to-review path."""
+
+    def __init__(self, decision: str = "allow", unavailable: bool = False):
+        self.decision = decision
+        self.unavailable = unavailable
+        self.calls = 0
+
+    def evaluate(
+        self, evaluation_id, payment_id, account_id, amount, destination, correlation_id
+    ) -> RiskResult:
+        self.calls += 1
+        if self.unavailable:
+            raise RiskUnavailable("engine down")
+        return RiskResult(decision=self.decision, score=0, reasons=[])

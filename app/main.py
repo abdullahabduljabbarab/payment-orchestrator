@@ -81,15 +81,20 @@ app = FastAPI(
 # A single router so circuit-breaker state persists across requests.
 _router = ProviderRouter([NorthPay(), RapidPay(), LegacyPay()])
 
+# A single ledger client so the authentication token and the HTTP connection
+# pool are reused across requests. A fresh client per request would re-run the
+# ledger's bcrypt login on every payment, which dominates payment latency.
+_ledger_client = HttpLedgerClient(
+    base_url=config.LEDGER_BASE_URL,
+    username=config.LEDGER_USERNAME,
+    password=config.LEDGER_PASSWORD,
+    suspense_account_id=UUID(config.SUSPENSE_ACCOUNT_ID),
+    settlement_account_id=UUID(config.SETTLEMENT_ACCOUNT_ID),
+)
+
 
 def get_ledger_client() -> LedgerClient:
-    return HttpLedgerClient(
-        base_url=config.LEDGER_BASE_URL,
-        username=config.LEDGER_USERNAME,
-        password=config.LEDGER_PASSWORD,
-        suspense_account_id=UUID(config.SUSPENSE_ACCOUNT_ID),
-        settlement_account_id=UUID(config.SETTLEMENT_ACCOUNT_ID),
-    )
+    return _ledger_client
 
 
 def get_provider_router() -> ProviderRouter:

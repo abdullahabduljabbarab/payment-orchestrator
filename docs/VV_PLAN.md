@@ -2,7 +2,7 @@
 
 ## Approach
 
-Every requirement this service owns is verified by an automated test running against a PostgreSQL database, and every behaviour that can be driven deterministically is additionally proven against the live Cloud Run deployment. CI runs the full suite (63 tests) against a PostgreSQL service container on every push, applies the Alembic migrations before the tests, lints with ruff, and validates the Terraform. The requirements are the ABS system requirements owned by the orchestrator, defined in [SYSTEM_REQUIREMENTS.md](https://github.com/abdullahabduljabbarab/abs-financial-systems/blob/main/SYSTEM_REQUIREMENTS.md).
+Every requirement this service owns is verified by an automated test running against a PostgreSQL database, and every behaviour that can be driven deterministically is additionally proven against the live Cloud Run deployment. CI runs the full suite (67 tests) against a PostgreSQL service container on every push, applies the Alembic migrations before the tests, lints with ruff, and validates the Terraform. The requirements are the ABS system requirements owned by the orchestrator, defined in [SYSTEM_REQUIREMENTS.md](https://github.com/abdullahabduljabbarab/abs-financial-systems/blob/main/SYSTEM_REQUIREMENTS.md).
 
 ## Requirement-to-Test Mapping
 
@@ -33,6 +33,7 @@ Every requirement this service owns is verified by an automated test running aga
 | Ledger unavailability leaves the payment retryable, not lost | Automated | `test_ledger_unavailable_leaves_payment_reserving` |
 | Reconcile is refused on a non-UNKNOWN payment | Automated + Live | `test_reconcile_on_settled_payment_conflicts`; live `409` |
 | The ORM and the migration agree on the schema | Automated | `test_orm_persists_enum_values_not_names`, `test_orm_enum_matches_initial_migration` |
+| The consumer deduplicates redelivered events on event_id | Automated + Live | `test_redelivery_of_the_same_event_is_a_duplicate`, `test_independent_events_are_not_duplicates`; live consumer against the subscription |
 | API contract: settle, rejection, validation, not-found | Automated | `test_post_payment_settles`, `test_post_payment_over_limit_rejected`, `test_invalid_amount_rejected`, `test_get_missing_payment_404` |
 | Migrations apply cleanly on a fresh database | CI evidence | `alembic upgrade head` runs in CI before the suite, and on container start |
 | Lint and infrastructure validity | CI evidence | ruff on push; `terraform fmt`, `init`, `validate` in the Terraform workflow |

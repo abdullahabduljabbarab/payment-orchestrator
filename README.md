@@ -128,6 +128,8 @@ payment.settled             bd7e9938-1005-42f7-b55a-c3c8755e7694
 
 The guarantee is at-least-once, stated honestly. A row is marked published only after the transport accepts it, so a publish failure leaves it pending for retry, and consumers deduplicate on `event_id`. Publishing stops at the first failure so ordering holds and the failed row and everything after it stay pending.
 
+A reference consumer is in [`scripts/consumer.py`](scripts/consumer.py): it reads the subscription and deduplicates on the `event_id` attribute, so an at-least-once redelivery is a no-op. Its deduplication contract is covered by `tests/test_consumer.py`.
+
 ---
 
 ## Architecture
@@ -173,7 +175,7 @@ The full GCP stack (the database and user, Artifact Registry, both secrets, a le
 
 ## Verification and evidence
 
-63 automated tests cover the state machine, the idempotent ledger client, the full service lifecycle, the provider router and circuit breaker, the transactional outbox, the API, and schema integrity. On top of the unit tests, the full path was exercised against the live deployment: a real payment settling against the live ledger (customer 1000.00 to 750.00, Payment Suspense netting to zero, Settlement Clearing 0 to 250.00), the six lifecycle events published to and pulled back from Pub/Sub, and each failure and edge path driven live and shown above.
+67 automated tests cover the state machine, the idempotent ledger client, the full service lifecycle, the provider router and circuit breaker, the transactional outbox, the API, schema integrity, and the event consumer's deduplication. On top of the unit tests, the full path was exercised against the live deployment: a real payment settling against the live ledger (customer 1000.00 to 750.00, Payment Suspense netting to zero, Settlement Clearing 0 to 250.00), the six lifecycle events published to and pulled back from Pub/Sub, and each failure and edge path driven live and shown above.
 
 **A defect the live deployment found.** The first live payment returned `500`. The `paymentstate` type is created by the migration from the enum's lowercase values (`received`), but the ORM defaulted to persisting the member names (`RECEIVED`), which the live type rejected. It passed CI because the suite builds tables from the model metadata, which is self-consistent, while the live schema is built by Alembic, so only production exercised the two against each other. The fix persists the enum values, and a schema test now fails if the model and the migration ever diverge on the enum labels again. Full write-up in [`PRODUCTION_LOG.md`](docs/PRODUCTION_LOG.md), Milestone 6.
 
@@ -256,8 +258,8 @@ The full design, including the complete state machine and the provider model, is
 app/            FastAPI application, state machine, service layer, ledger client, providers, router, outbox relay
 migrations/     Alembic migrations (schema and enum, then the ABS event envelope)
 terraform/      Orchestrator infrastructure as code on the ledger's project
-scripts/        Load test harness
-tests/          63 tests: state machine, ledger client, service lifecycle, router, outbox, API, schema
+scripts/        Load test harness and the Pub/Sub consumer
+tests/          67 tests: state machine, ledger client, service lifecycle, router, outbox, API, schema, consumer
 docs/           Design, requirements, decisions, engineering report, threat model, security, SLOs, V&V plan, build log, evidence
 ```
 

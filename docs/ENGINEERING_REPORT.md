@@ -45,7 +45,7 @@ Deployed on GCP Cloud Run with auto-scaling (0 to 3 instances). CI/CD via GitHub
 
 | Metric | Value |
 |--------|-------|
-| Test count | 63 |
+| Test count | 67 |
 | Alembic migrations | 2 (initial schema and the paymentstate enum, then the ABS event envelope) |
 | API endpoints | 8 |
 | Payment states | 13, with a single allowed-transition table |
@@ -63,6 +63,7 @@ Deployed on GCP Cloud Run with auto-scaling (0 to 3 instances). CI/CD via GitHub
 | Transactional outbox | Envelope carries the full contract, correlation propagates and causation chains, at-least-once with a stable dedup id, a failed publish leaves everything pending |
 | API | Settle, over-limit rejection, invalid amount, not found, reconcile refused on a settled payment |
 | Schema | The ORM and the migration agree on the enum labels |
+| Event consumer | Deduplicates on event_id, so an at-least-once redelivery is a no-op |
 
 ## Injected failures tested
 

@@ -9,12 +9,17 @@ state on disk.
 
 import json
 import logging
+from datetime import datetime, timezone
 from decimal import Decimal
 
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.ledger_client import InsufficientFunds, LedgerClient, LedgerUnavailable
-from app.models import OutboxEvent, Payment, PaymentEvent
+from app.models import OutboxEvent, Payment, PaymentEvent, ProviderAttempt
+from app.providers import Outcome, Provider
+from app.router import ProviderRouter
 from app.schemas import PaymentCreate
 from app.states import PaymentState, assert_transition
 
@@ -143,13 +148,239 @@ def _reserve(db: Session, payment: Payment, ledger: LedgerClient) -> None:
     )
 
 
-def process_payment(db: Session, payment: Payment, ledger: LedgerClient) -> Payment:
-    """Drive a newly received payment through risk and reservation.
+def _record_attempt(
+    db: Session,
+    payment: Payment,
+    provider: str,
+    reference: str | None,
+    callback_type: str,
+    outcome: str,
+) -> None:
+    db.add(
+        ProviderAttempt(
+            payment_id=payment.id,
+            provider=provider,
+            provider_reference=reference,
+            callback_type=callback_type,
+            outcome=outcome,
+            processed_at=datetime.now(tz=timezone.utc),
+        )
+    )
+    db.commit()
 
-    The provider call, capture and release are added in the next slice. For now
-    a payment ends this pass in FUNDS_RESERVED (ready for the provider),
-    RISK_REVIEW (held), FAILED (insufficient funds) or REJECTED (risk block).
+
+def _capture(db: Session, payment: Payment, ledger: LedgerClient) -> None:
+    _advance(db, payment, PaymentState.CAPTURING)
+    try:
+        tx_id = ledger.capture(payment.id, payment.amount)
+    except LedgerUnavailable:
+        logger.warning(
+            "ledger unavailable during capture, payment left in CAPTURING",
+            extra={"payment_id": str(payment.id)},
+        )
+        return
+    payment.capture_tx_id = tx_id
+    _advance(
+        db,
+        payment,
+        PaymentState.SETTLED,
+        event_type="payment.captured",
+        payload={"payment_id": str(payment.id), "capture_tx_id": str(tx_id)},
+    )
+    _emit(db, payment, "payment.settled", {"payment_id": str(payment.id)})
+    db.commit()
+
+
+def _release(db: Session, payment: Payment, ledger: LedgerClient, reason: str) -> None:
+    _advance(db, payment, PaymentState.RELEASING)
+    try:
+        tx_id = ledger.release(payment.id, payment.account_id, payment.amount)
+    except LedgerUnavailable:
+        logger.warning(
+            "ledger unavailable during release, payment left in RELEASING",
+            extra={"payment_id": str(payment.id)},
+        )
+        return
+    payment.release_tx_id = tx_id
+    _advance(
+        db,
+        payment,
+        PaymentState.FAILED,
+        event_type="payment.released",
+        payload={"payment_id": str(payment.id), "release_tx_id": str(tx_id)},
+    )
+    _emit(db, payment, "payment.failed", {"payment_id": str(payment.id), "reason": reason})
+    db.commit()
+
+
+def submit_to_provider(
+    db: Session, payment: Payment, router: ProviderRouter, ledger: LedgerClient
+) -> Payment:
+    """Send a reserved payment to a provider, falling back on definitive
+    unavailability but never on an ambiguous timeout."""
+    for provider in router.available():
+        payment.provider = provider.name
+        if payment.state == PaymentState.FUNDS_RESERVED:
+            _advance(db, payment, PaymentState.PROVIDER_PENDING)
+        else:
+            db.commit()
+
+        resp = provider.submit(payment.id, payment.amount)
+        _record_attempt(
+            db, payment, provider.name, resp.provider_reference, "submit", resp.outcome.value
+        )
+
+        if resp.outcome is Outcome.SUCCESS:
+            router.record_success(provider.name)
+            _emit(
+                db,
+                payment,
+                "payment.provider_succeeded",
+                {"payment_id": str(payment.id), "provider": provider.name},
+            )
+            db.commit()
+            _capture(db, payment, ledger)
+            return payment
+
+        if resp.outcome is Outcome.FAILED:
+            router.record_success(provider.name)
+            _emit(
+                db,
+                payment,
+                "payment.provider_failed",
+                {"payment_id": str(payment.id), "provider": provider.name},
+            )
+            db.commit()
+            _release(db, payment, ledger, "provider_failed")
+            return payment
+
+        if resp.outcome is Outcome.TIMEOUT:
+            # Ambiguous: pin to this provider, never fall back (ABS-REQ-012).
+            _advance(
+                db,
+                payment,
+                PaymentState.UNKNOWN,
+                event_type="payment.unknown",
+                payload={"payment_id": str(payment.id), "provider": provider.name},
+            )
+            return payment
+
+        # UNAVAILABLE: a definitive failure to route. Open the breaker and try
+        # the next available provider.
+        router.record_failure(provider.name)
+
+    # Every available provider was unavailable. The reservation is released so
+    # the customer's funds are not stranded.
+    _release(db, payment, ledger, "no_provider_available")
+    return payment
+
+
+def handle_callback(
+    db: Session,
+    payment: Payment,
+    provider: str,
+    provider_reference: str,
+    outcome: str,
+    ledger: LedgerClient,
+) -> str:
+    """Process a provider callback, ignoring duplicates.
+
+    Deduplication is on `(provider, provider_reference)` with a unique database
+    constraint, so a provider that sends the same callback more than once
+    produces a single financial effect (ABS-REQ-003). The pre-check handles the
+    common case; the constraint handles the race.
     """
+    existing = db.execute(
+        select(ProviderAttempt).where(
+            ProviderAttempt.provider == provider,
+            ProviderAttempt.provider_reference == provider_reference,
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        return "duplicate"
+
+    db.add(
+        ProviderAttempt(
+            payment_id=payment.id,
+            provider=provider,
+            provider_reference=provider_reference,
+            callback_type="callback",
+            outcome=outcome,
+            processed_at=datetime.now(tz=timezone.utc),
+        )
+    )
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        return "duplicate"
+
+    if payment.state not in (PaymentState.PROVIDER_PENDING, PaymentState.UNKNOWN):
+        # The payment was already resolved by another path; the callback is
+        # recorded but changes nothing.
+        return "ignored"
+
+    if outcome == Outcome.SUCCESS.value:
+        _emit(
+            db,
+            payment,
+            "payment.provider_succeeded",
+            {"payment_id": str(payment.id), "provider": provider},
+        )
+        db.commit()
+        _capture(db, payment, ledger)
+    elif outcome == Outcome.FAILED.value:
+        _emit(
+            db,
+            payment,
+            "payment.provider_failed",
+            {"payment_id": str(payment.id), "provider": provider},
+        )
+        db.commit()
+        _release(db, payment, ledger, "provider_failed")
+    return "processed"
+
+
+def reconcile_payment(
+    db: Session, payment: Payment, provider: Provider, ledger: LedgerClient
+) -> Payment:
+    """Resolve an UNKNOWN payment by asking the provider what happened."""
+    if payment.state is not PaymentState.UNKNOWN:
+        return payment
+
+    resp = provider.reconcile(payment.id)
+    _record_attempt(
+        db, payment, provider.name, resp.provider_reference, "reconcile", resp.outcome.value
+    )
+
+    if resp.outcome is Outcome.SUCCESS:
+        _emit(
+            db,
+            payment,
+            "payment.provider_succeeded",
+            {"payment_id": str(payment.id), "provider": provider.name},
+        )
+        db.commit()
+        _capture(db, payment, ledger)
+    elif resp.outcome is Outcome.FAILED:
+        _emit(
+            db,
+            payment,
+            "payment.provider_failed",
+            {"payment_id": str(payment.id), "provider": provider.name},
+        )
+        db.commit()
+        _release(db, payment, ledger, "reconciled_failed")
+    # Still ambiguous: leave the payment UNKNOWN for a later reconciliation.
+    return payment
+
+
+def process_payment(
+    db: Session, payment: Payment, router: ProviderRouter, ledger: LedgerClient
+) -> Payment:
+    """Drive a newly received payment through risk, reservation and the
+    provider. A payment ends this pass in SETTLED, FAILED, UNKNOWN (awaiting
+    reconciliation), RISK_REVIEW (held) or REJECTED."""
     _advance(db, payment, PaymentState.RISK_PENDING)
 
     decision, reasons = evaluate_risk(payment)
@@ -175,4 +406,7 @@ def process_payment(db: Session, payment: Payment, ledger: LedgerClient) -> Paym
         payload={"payment_id": str(payment.id)},
     )
     _reserve(db, payment, ledger)
+
+    if payment.state is PaymentState.FUNDS_RESERVED:
+        submit_to_provider(db, payment, router, ledger)
     return payment

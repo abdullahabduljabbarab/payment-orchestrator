@@ -2,6 +2,7 @@ import logging
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, HTTPException
+from pydantic import BaseModel
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
@@ -10,8 +11,16 @@ from app.database import get_db
 from app.ledger_client import HttpLedgerClient, LedgerClient
 from app.logging import setup_logging
 from app.models import Payment, PaymentEvent
+from app.providers import LegacyPay, NorthPay, RapidPay
+from app.router import ProviderRouter
 from app.schemas import PaymentCreate, PaymentResponse
-from app.service import create_payment, process_payment
+from app.service import (
+    create_payment,
+    handle_callback,
+    process_payment,
+    reconcile_payment,
+)
+from app.states import PaymentState
 
 setup_logging()
 logger = logging.getLogger("orchestrator.api")
@@ -25,6 +34,9 @@ app = FastAPI(
     ),
 )
 
+# A single router so circuit-breaker state persists across requests.
+_router = ProviderRouter([NorthPay(), RapidPay(), LegacyPay()])
+
 
 def get_ledger_client() -> LedgerClient:
     return HttpLedgerClient(
@@ -34,6 +46,16 @@ def get_ledger_client() -> LedgerClient:
         suspense_account_id=UUID(config.SUSPENSE_ACCOUNT_ID),
         settlement_account_id=UUID(config.SETTLEMENT_ACCOUNT_ID),
     )
+
+
+def get_provider_router() -> ProviderRouter:
+    return _router
+
+
+class ProviderCallback(BaseModel):
+    provider: str
+    provider_reference: str
+    outcome: str
 
 
 @app.get("/health")
@@ -47,9 +69,10 @@ def post_payment(
     data: PaymentCreate,
     db: Session = Depends(get_db),
     ledger: LedgerClient = Depends(get_ledger_client),
+    router: ProviderRouter = Depends(get_provider_router),
 ):
     payment = create_payment(db, data)
-    payment = process_payment(db, payment, ledger)
+    payment = process_payment(db, payment, router, ledger)
     return payment
 
 
@@ -80,3 +103,39 @@ def get_payment_events(payment_id: UUID, db: Session = Depends(get_db)):
         }
         for e in rows
     ]
+
+
+@app.post("/payments/{payment_id}/reconcile", response_model=PaymentResponse)
+def reconcile(
+    payment_id: UUID,
+    db: Session = Depends(get_db),
+    ledger: LedgerClient = Depends(get_ledger_client),
+    router: ProviderRouter = Depends(get_provider_router),
+):
+    payment = db.get(Payment, payment_id)
+    if payment is None:
+        raise HTTPException(status_code=404, detail="Payment not found")
+    if payment.state is not PaymentState.UNKNOWN:
+        raise HTTPException(
+            status_code=409, detail="Payment is not awaiting reconciliation"
+        )
+    provider = router.provider(payment.provider)
+    reconcile_payment(db, payment, provider, ledger)
+    db.refresh(payment)
+    return payment
+
+
+@app.post("/payments/{payment_id}/callback")
+def callback(
+    payment_id: UUID,
+    body: ProviderCallback,
+    db: Session = Depends(get_db),
+    ledger: LedgerClient = Depends(get_ledger_client),
+):
+    payment = db.get(Payment, payment_id)
+    if payment is None:
+        raise HTTPException(status_code=404, detail="Payment not found")
+    status = handle_callback(
+        db, payment, body.provider, body.provider_reference, body.outcome, ledger
+    )
+    return {"status": status}

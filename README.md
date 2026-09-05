@@ -193,7 +193,16 @@ The full GCP stack (the database and user, Artifact Registry, both secrets, a le
 | Event capture atomic with state change, at-least-once (ABS-REQ-007) | `test_failed_publish_leaves_everything_pending`, `test_event_id_is_stable_for_consumer_dedup`, live Pub/Sub pull |
 | Model and migration agree on schema | `test_orm_enum_matches_initial_migration` |
 
-The full mapping of every requirement and behaviour to its test and live evidence is in [`docs/VV_PLAN.md`](docs/VV_PLAN.md).
+**Load test (Locust, live Cloud Run, 5 concurrent users, 60 seconds).** Zero failed requests, read endpoints at 40 to 51ms median, payments at 340ms median across two synchronous ledger round trips. Load testing also surfaced a real inefficiency: payments were re-running the ledger's bcrypt login on every request because a fresh ledger client was built per request. Reusing a single client cut the payment median from 1100ms to 340ms and doubled throughput. After the run, Payment Suspense nets to zero and the ledger's own `/audit/verify` and `/audit/chain` pass.
+
+| Metric | Before fix | After fix | Target |
+|--------|-----------|-----------|--------|
+| Payment p50 | 1100ms | 340ms | < 500ms |
+| Payment p95 | 2000ms | 430ms | < 750ms |
+| Throughput | 4.67 req/s | 9.86 req/s | > 5 req/s |
+| Failures | 0% | 0% | < 1% |
+
+The full requirement-to-test mapping is in [`docs/VV_PLAN.md`](docs/VV_PLAN.md), the load test write-up in [`docs/SLO.md`](docs/SLO.md), the wider engineering narrative in [`docs/ENGINEERING_REPORT.md`](docs/ENGINEERING_REPORT.md), and the STRIDE threat model in [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md).
 
 ---
 
@@ -237,7 +246,7 @@ pytest
 
 **Its own database on the shared instance.** The orchestrator keeps its own schema and user on the ledger's Cloud SQL instance and settles only through the ledger API, so financial state stays owned by the ledger while the orchestrator owns its own lifecycle state.
 
-The full design, including the complete state machine and the provider model, is in [`DESIGN.md`](docs/DESIGN.md), and the build history is in [`PRODUCTION_LOG.md`](docs/PRODUCTION_LOG.md).
+The full design, including the complete state machine and the provider model, is in [`DESIGN.md`](docs/DESIGN.md); the decisions and their trade-offs are recorded as ADRs in [`docs/DECISIONS.md`](docs/DECISIONS.md) and narrated in [`docs/ENGINEERING_REPORT.md`](docs/ENGINEERING_REPORT.md); the build history is in [`PRODUCTION_LOG.md`](docs/PRODUCTION_LOG.md).
 
 ---
 
@@ -247,8 +256,9 @@ The full design, including the complete state machine and the provider model, is
 app/            FastAPI application, state machine, service layer, ledger client, providers, router, outbox relay
 migrations/     Alembic migrations (schema and enum, then the ABS event envelope)
 terraform/      Orchestrator infrastructure as code on the ledger's project
+scripts/        Load test harness
 tests/          63 tests: state machine, ledger client, service lifecycle, router, outbox, API, schema
-docs/           Design, the V&V plan, the build log, and the evidence screenshots
+docs/           Design, requirements, decisions, engineering report, threat model, security, SLOs, V&V plan, build log, evidence
 ```
 
 ---

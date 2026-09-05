@@ -27,13 +27,55 @@ from app.states import PaymentState
 setup_logging()
 logger = logging.getLogger("orchestrator.api")
 
+DESCRIPTION = """
+Payment lifecycle orchestration: reserve, capture and release settlement
+against the ledger.
+
+A payment moves money in two phases through three positions, so no stage can
+leave funds in an impossible place. **Reserve** moves the customer's funds into
+Payment Suspense before any provider is called, **capture** moves them on to
+Settlement Clearing once the provider confirms, and **release** returns them to
+the customer when it does not. Failure is a compensating transfer, never a
+delete, because the ledger is append-only.
+
+**Correctness and resilience properties**
+
+- The provider is never called before funds are reserved
+- Each reserve, capture and release has an at-most-once ledger effect, keyed
+  deterministically and retried to completion
+- An ambiguous timeout pins the payment to its provider and reconciles, never falling back
+- Duplicate provider callbacks are deduplicated on `(provider, provider_reference)`
+- Every state change and its outbox event commit in the same transaction
+
+**Events**
+
+State changes are published through a transactional outbox to Pub/Sub with the
+ABS event envelope, at least once, deduplicated by consumers on `event_id`.
+"""
+
+TAGS = [
+    {"name": "System", "description": "Health and service status."},
+    {"name": "Payments", "description": "Create a payment and inspect its state and history."},
+    {
+        "name": "Reconciliation",
+        "description": "Resolve a payment left UNKNOWN by an ambiguous provider timeout.",
+    },
+    {
+        "name": "Provider Callbacks",
+        "description": "Asynchronous provider outcomes, deduplicated on arrival.",
+    },
+    {
+        "name": "Event Delivery",
+        "description": "Transactional outbox relay. At-least-once delivery to Pub/Sub.",
+    },
+]
+
 app = FastAPI(
     title="Payment Orchestrator",
     version="0.1.0",
-    description=(
-        "Payment lifecycle orchestration with reserve, capture and release "
-        "settlement against the ledger."
-    ),
+    description=DESCRIPTION,
+    openapi_tags=TAGS,
+    license_info={"name": "MIT", "url": "https://opensource.org/licenses/MIT"},
 )
 
 # A single router so circuit-breaker state persists across requests.
@@ -64,13 +106,19 @@ class ProviderCallback(BaseModel):
     outcome: str
 
 
-@app.get("/health")
+@app.get("/health", tags=["System"], summary="Liveness and database probe")
 def health(db: Session = Depends(get_db)):
     db.execute(text("SELECT 1"))
     return {"status": "ok", "database": "connected"}
 
 
-@app.post("/payments", response_model=PaymentResponse, status_code=201)
+@app.post(
+    "/payments",
+    response_model=PaymentResponse,
+    status_code=201,
+    tags=["Payments"],
+    summary="Create and process a payment",
+)
 def post_payment(
     data: PaymentCreate,
     db: Session = Depends(get_db),
@@ -82,7 +130,12 @@ def post_payment(
     return payment
 
 
-@app.get("/payments/{payment_id}", response_model=PaymentResponse)
+@app.get(
+    "/payments/{payment_id}",
+    response_model=PaymentResponse,
+    tags=["Payments"],
+    summary="Retrieve a payment",
+)
 def get_payment(payment_id: UUID, db: Session = Depends(get_db)):
     payment = db.get(Payment, payment_id)
     if payment is None:
@@ -90,7 +143,11 @@ def get_payment(payment_id: UUID, db: Session = Depends(get_db)):
     return payment
 
 
-@app.get("/payments/{payment_id}/events")
+@app.get(
+    "/payments/{payment_id}/events",
+    tags=["Payments"],
+    summary="Payment state history",
+)
 def get_payment_events(payment_id: UUID, db: Session = Depends(get_db)):
     payment = db.get(Payment, payment_id)
     if payment is None:
@@ -111,7 +168,12 @@ def get_payment_events(payment_id: UUID, db: Session = Depends(get_db)):
     ]
 
 
-@app.post("/payments/{payment_id}/reconcile", response_model=PaymentResponse)
+@app.post(
+    "/payments/{payment_id}/reconcile",
+    response_model=PaymentResponse,
+    tags=["Reconciliation"],
+    summary="Reconcile an UNKNOWN payment",
+)
 def reconcile(
     payment_id: UUID,
     db: Session = Depends(get_db),
@@ -131,7 +193,11 @@ def reconcile(
     return payment
 
 
-@app.post("/payments/{payment_id}/callback")
+@app.post(
+    "/payments/{payment_id}/callback",
+    tags=["Provider Callbacks"],
+    summary="Handle a provider callback",
+)
 def callback(
     payment_id: UUID,
     body: ProviderCallback,
@@ -147,7 +213,11 @@ def callback(
     return {"status": status}
 
 
-@app.get("/outbox/pending")
+@app.get(
+    "/outbox/pending",
+    tags=["Event Delivery"],
+    summary="List unpublished events",
+)
 def outbox_pending(
     limit: int = Query(50, ge=1, le=200), db: Session = Depends(get_db)
 ):
@@ -167,7 +237,11 @@ def outbox_pending(
     }
 
 
-@app.post("/outbox/publish")
+@app.post(
+    "/outbox/publish",
+    tags=["Event Delivery"],
+    summary="Relay pending events to the broker",
+)
 def outbox_publish(
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),

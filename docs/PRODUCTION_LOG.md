@@ -175,6 +175,7 @@ Integrate the risk engine: replace the local threshold stub with a call to the d
 
 ### Evidence
 - 72/72 tests: a payment whose engine decision is review is held without reserving, block is rejected, allow settles, and an unreachable engine holds the payment for review. The risk client maps a 200 to a decision and a 5xx or connection error to unavailable, and the evaluation id is deterministic per payment.
+- Proven live across the three services: a 250 payment was allowed by the engine (score 38) and settled; a 6000 payment was held by the engine (score 63, reasons high value, short history and new destination) and left in RISK_REVIEW with no reservation and no money moved. In both cases the engine's persisted decision, fetched by the deterministic evaluation id, carried the same correlation id as the orchestrator's payment, so one request traces across the orchestrator and the risk engine. The decision came from the engine's score, not a local threshold. The fail-to-review path is proven in the suite rather than live, since it would require taking the live engine down.
 
 ### Next
-Deploy and prove the full live path: a payment whose risk decision comes from the live engine, and the fail-to-review behaviour when the engine is unreachable.
+The ecosystem's core loop is closed: ledger, orchestrator and risk engine live and connected. Next are the downstream consumers, notification and analytics, then the shared platform infrastructure.

@@ -183,7 +183,12 @@ def _capture(db: Session, payment: Payment, ledger: LedgerClient) -> None:
         event_type="payment.captured",
         payload={"payment_id": str(payment.id), "capture_tx_id": str(tx_id)},
     )
-    _emit(db, payment, "payment.settled", {"payment_id": str(payment.id)})
+    _emit(
+        db,
+        payment,
+        "payment.settled",
+        {"payment_id": str(payment.id), "account_id": str(payment.account_id)},
+    )
     db.commit()
 
 
@@ -205,7 +210,16 @@ def _release(db: Session, payment: Payment, ledger: LedgerClient, reason: str) -
         event_type="payment.released",
         payload={"payment_id": str(payment.id), "release_tx_id": str(tx_id)},
     )
-    _emit(db, payment, "payment.failed", {"payment_id": str(payment.id), "reason": reason})
+    _emit(
+        db,
+        payment,
+        "payment.failed",
+        {
+            "payment_id": str(payment.id),
+            "account_id": str(payment.account_id),
+            "reason": reason,
+        },
+    )
     db.commit()
 
 
@@ -409,7 +423,12 @@ def process_payment(
             payment,
             PaymentState.REJECTED,
             event_type="payment.rejected",
-            payload={"payment_id": str(payment.id), "reasons": reasons, "score": score},
+            payload={
+                "payment_id": str(payment.id),
+                "account_id": str(payment.account_id),
+                "reasons": reasons,
+                "score": score,
+            },
             detail="risk_block",
         )
         return payment

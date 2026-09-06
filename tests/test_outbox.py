@@ -1,3 +1,4 @@
+import json
 from decimal import Decimal
 from uuid import uuid4
 
@@ -48,6 +49,32 @@ def test_envelope_has_full_abs_contract(db):
     assert envelope["aggregate_id"] == str(payment.id)
     assert envelope["occurred_at"] is not None
     assert isinstance(envelope["payload"], dict)
+
+
+def test_customer_facing_events_carry_account_id(db):
+    # A downstream consumer (the notification service) must be able to tell who
+    # to notify from the event alone, without calling back into the orchestrator.
+    # account_id is domain context for these events, so it belongs in the payload.
+    payment = _settled_payment(db)
+    rows = pending_events(db, limit=200)
+    by_type = {r.event_type: json.loads(r.payload) for r in rows}
+
+    assert by_type["payment.settled"]["account_id"] == str(payment.account_id)
+
+
+def test_rejected_event_carries_account_id(db):
+    ledger = FakeLedgerClient()
+    router = ProviderRouter([ScriptedProvider("P1", [Outcome.SUCCESS])])
+    payment = create_payment(
+        db,
+        PaymentCreate(account_id=uuid4(), amount=Decimal("100.00"), destination="acme"),
+    )
+    process_payment(db, payment, router, ledger, FakeRiskClient(decision="block"))
+    rows = pending_events(db, limit=200)
+    rejected = next(
+        json.loads(r.payload) for r in rows if r.event_type == "payment.rejected"
+    )
+    assert rejected["account_id"] == str(payment.account_id)
 
 
 def test_correlation_propagates_and_causation_chains(db):

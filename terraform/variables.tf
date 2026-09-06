@@ -60,3 +60,15 @@ variable "settlement_account_id" {
   type        = string
   default     = "a0000000-0000-4000-8000-000000000002"
 }
+
+variable "github_owner" {
+  description = "GitHub owner allowed to deploy via Workload Identity Federation"
+  type        = string
+  default     = "abdullahabduljabbarab"
+}
+
+variable "github_repo" {
+  description = "GitHub repository allowed to impersonate the deploy service account"
+  type        = string
+  default     = "payment-orchestrator"
+}

@@ -10,7 +10,7 @@ output "artifact_registry" {
 
 output "pubsub_topic" {
   description = "Topic the orchestrator publishes payment events to"
-  value       = google_pubsub_topic.payment_events.id
+  value       = data.google_pubsub_topic.payment_events.id
 }
 
 output "pubsub_subscription" {

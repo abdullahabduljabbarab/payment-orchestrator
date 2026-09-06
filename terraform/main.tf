@@ -13,6 +13,8 @@ provider "google" {
   region  = var.region
 }
 
+data "google_project" "current" {}
+
 # The orchestrator layers onto the ledger's project. The Cloud SQL instance is
 # owned and provisioned by the ledger; the orchestrator takes its own database
 # and user on that instance rather than standing up a second server. This data
@@ -87,13 +89,15 @@ resource "google_secret_manager_secret_iam_member" "cloud_run_ledger_password" {
   member    = "serviceAccount:${google_service_account.cloud_run.email}"
 }
 
-resource "google_pubsub_topic" "payment_events" {
+# payment-events is a shared topic owned by platform-infrastructure; the
+# orchestrator references it and grants itself publisher on it.
+data "google_pubsub_topic" "payment_events" {
   name = "payment-events"
 }
 
 resource "google_pubsub_subscription" "payment_events_sub" {
   name  = "payment-events-sub"
-  topic = google_pubsub_topic.payment_events.id
+  topic = data.google_pubsub_topic.payment_events.id
 
   ack_deadline_seconds = 20
 
@@ -104,7 +108,7 @@ resource "google_pubsub_subscription" "payment_events_sub" {
 }
 
 resource "google_pubsub_topic_iam_member" "cloud_run_publish" {
-  topic  = google_pubsub_topic.payment_events.id
+  topic  = data.google_pubsub_topic.payment_events.id
   role   = "roles/pubsub.publisher"
   member = "serviceAccount:${google_service_account.cloud_run.email}"
 }
@@ -175,7 +179,7 @@ resource "google_cloud_run_v2_service" "payment_orchestrator" {
 
       env {
         name  = "PUBSUB_TOPIC"
-        value = google_pubsub_topic.payment_events.id
+        value = data.google_pubsub_topic.payment_events.id
       }
 
       resources {
@@ -205,4 +209,37 @@ resource "google_cloud_run_v2_service_iam_member" "public" {
   location = var.region
   role     = "roles/run.invoker"
   member   = "allUsers"
+}
+
+# Keyless CI deploy: GitHub Actions authenticates via Workload Identity
+# Federation and impersonates a dedicated least-privilege deploy service account,
+# so no service-account key is stored in the repository. The pool and provider are
+# shared and owned by platform-infrastructure; this repo references the pool (its
+# name composed from the project number) and contributes only its own deploy
+# account and binding.
+locals {
+  wif_pool_name = "projects/${data.google_project.current.number}/locations/global/workloadIdentityPools/github-actions"
+}
+
+resource "google_service_account" "deploy" {
+  account_id   = "orchestrator-deploy"
+  display_name = "Payment Orchestrator Deploy"
+}
+
+resource "google_project_iam_member" "deploy_roles" {
+  for_each = toset([
+    "roles/run.admin",
+    "roles/artifactregistry.writer",
+    "roles/iam.serviceAccountUser",
+  ])
+  project = var.project_id
+  role    = each.value
+  member  = "serviceAccount:${google_service_account.deploy.email}"
+}
+
+# Only the payment-orchestrator repository may impersonate the deploy account.
+resource "google_service_account_iam_member" "deploy_wif" {
+  service_account_id = google_service_account.deploy.name
+  role               = "roles/iam.workloadIdentityUser"
+  member             = "principalSet://iam.googleapis.com/${local.wif_pool_name}/attribute.repository/${var.github_owner}/${var.github_repo}"
 }

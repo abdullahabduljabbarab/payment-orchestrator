@@ -72,15 +72,25 @@ resource "google_secret_manager_secret_version" "ledger_admin_password" {
   secret_data = var.ledger_admin_password
 }
 
+# Dedicated least-privilege runtime identity: the service runs as this account,
+# not the default compute service account. It holds only Cloud SQL Client, read
+# access to its own two secrets (its database-url and the ledger admin password it
+# authenticates to the ledger with), and publish on its own payment-events topic.
 resource "google_service_account" "cloud_run" {
-  account_id   = "payment-orchestrator-runner"
-  display_name = "Payment Orchestrator Cloud Run"
+  account_id   = "payment-orchestrator-runtime"
+  display_name = "Payment Orchestrator Runtime"
 }
 
 resource "google_secret_manager_secret_iam_member" "cloud_run_database_url" {
   secret_id = google_secret_manager_secret.orchestrator_database_url.id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.cloud_run.email}"
+}
+
+resource "google_project_iam_member" "cloud_run_cloudsql" {
+  project = var.project_id
+  role    = "roles/cloudsql.client"
+  member  = "serviceAccount:${google_service_account.cloud_run.email}"
 }
 
 resource "google_secret_manager_secret_iam_member" "cloud_run_ledger_password" {

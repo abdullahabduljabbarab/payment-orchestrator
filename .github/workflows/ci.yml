@@ -72,6 +72,7 @@ jobs:
           --image europe-west2-docker.pkg.dev/ledger-api-507618/payment-orchestrator/payment-orchestrator
           --region europe-west2
           --allow-unauthenticated
+          --service-account payment-orchestrator-runtime@ledger-api-507618.iam.gserviceaccount.com
           --add-cloudsql-instances ledger-api-507618:europe-west2:ledger-db
           --set-env-vars ENVIRONMENT=production,LEDGER_BASE_URL=https://ledger-api-465847189589.europe-west2.run.app,LEDGER_USERNAME=admin,SUSPENSE_ACCOUNT_ID=a0000000-0000-4000-8000-000000000001,SETTLEMENT_ACCOUNT_ID=a0000000-0000-4000-8000-000000000002,PUBSUB_TOPIC=projects/ledger-api-507618/topics/payment-events,RISK_BASE_URL=https://risk-engine-eppidgbmxa-nw.a.run.app
           --set-secrets DATABASE_URL=orchestrator-database-url:latest,LEDGER_PASSWORD=ledger-admin-password:latest

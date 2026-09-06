@@ -55,9 +55,14 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v4
+      # Keyless auth via Workload Identity Federation: GitHub mints a short-lived
+      # OIDC token that GCP exchanges to impersonate the deploy service account.
+      # No long-lived service-account key is stored in the repository.
       - uses: google-github-actions/auth@v2
         with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          project_id: ledger-api-507618
+          workload_identity_provider: projects/465847189589/locations/global/workloadIdentityPools/github-actions/providers/github
+          service_account: orchestrator-deploy@ledger-api-507618.iam.gserviceaccount.com
       - uses: google-github-actions/setup-gcloud@v2
       - run: gcloud auth configure-docker europe-west2-docker.pkg.dev --quiet
       - run: docker build -t europe-west2-docker.pkg.dev/ledger-api-507618/payment-orchestrator/payment-orchestrator .
